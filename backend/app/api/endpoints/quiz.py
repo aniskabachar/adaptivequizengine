@@ -6,7 +6,7 @@ import json
 import httpx
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
-from app.core.config import resolve_groq_api_key
+from app.core.config import resolve_groq_api_key, config
 from app.database.session import get_db
 from app.irt.theta_estimator import ThetaEstimator
 from app.models.user import User
@@ -104,7 +104,7 @@ Calibration guide:
 - Expert (1.5 to 3): evaluate tradeoffs, synthesize, create solutions"""
 
     message = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
+        model=config.GROQ_MODEL,
         max_tokens=1500,
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"}

@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     
     # Groq LLM
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
-    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    GROQ_MODEL: str = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
     model_config = SettingsConfigDict(case_sensitive=True)
 

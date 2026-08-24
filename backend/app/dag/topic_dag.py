@@ -3,6 +3,7 @@ import httpx
 from groq import Groq
 import json
 import logging
+from app.core.config import config
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +63,7 @@ Rules:
             try:
                 logger.info(f"Attempt {attempt + 1}: Making API call to Groq...")
                 message = client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
+                    model=config.GROQ_MODEL,
                     max_tokens=1500,
                     messages=[{"role": "user", "content": prompt}],
                     response_format={"type": "json_object"},

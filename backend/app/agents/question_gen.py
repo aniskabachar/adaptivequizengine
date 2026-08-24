@@ -13,6 +13,7 @@ from typing import Optional
 import httpx
 
 from groq import Groq
+from app.core.config import config
 
 from app.misconceptions.seed_tags import DEFAULT_TAGS
 
@@ -121,7 +122,7 @@ Respond ONLY with valid JSON (no markdown, no backticks):
             http_client=httpx.Client(verify=False)
         )
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model=config.GROQ_MODEL,
             max_tokens=1500,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},

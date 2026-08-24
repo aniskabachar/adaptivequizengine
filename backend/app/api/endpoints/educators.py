@@ -4,7 +4,7 @@ from typing import Optional
 import httpx
 from groq import Groq
 
-from app.core.config import resolve_groq_api_key
+from app.core.config import resolve_groq_api_key, config
 from app.database.session import get_db
 from app.api.endpoints.users import get_current_teacher
 from app.models.classroom import Classroom, ClassEnrollment
@@ -286,7 +286,7 @@ Format the output clearly and professionally for a classroom teacher."""
             http_client=httpx.Client(verify=False)
         )
         message = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model=config.GROQ_MODEL,
             max_tokens=2000,
             messages=[{"role": "user", "content": prompt}]
         )

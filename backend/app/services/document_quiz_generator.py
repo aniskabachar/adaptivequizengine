@@ -4,6 +4,7 @@ from typing import List, Dict, Optional
 import json
 from groq import Groq
 import httpx
+from app.core.config import config
 
 
 class DocumentQuizGenerator:
@@ -77,7 +78,7 @@ Maximum 10 subtopics total. Quality over quantity. Only the most important conce
 
         try:
             response = self.client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model=config.GROQ_MODEL,
                 max_tokens=2000,
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"}
@@ -197,7 +198,7 @@ REMEMBER: Correct answer position must be random (A, B, C, or D) - vary it!"""
 
         try:
             response = self.client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model=config.GROQ_MODEL,
                 max_tokens=3000,
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"}
