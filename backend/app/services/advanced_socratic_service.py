@@ -59,6 +59,9 @@ class AdvancedSocraticService:
             session_data = self.hint_sessions[session_id]
             previous_hints = session_data.get("hints", [])
             hint_level_override = session_data.get("next_suggested_level")
+            print(f"Found existing session {session_id}, previous hints count: {len(previous_hints)}, next suggested level: {hint_level_override}")
+        else:
+            print(f"New session {session_id}, no previous hints")
 
         # 3. GET ADAPTIVE HINT
         hint_response = await self.agent.get_adaptive_hint(
@@ -124,17 +127,30 @@ class AdvancedSocraticService:
 
         if session_id not in self.hint_sessions:
             # No previous hints in this session, start fresh
+            print(f"No session found for {session_id}, starting fresh")
             return await self.get_adaptive_hint(request, db)
 
         session_data = self.hint_sessions[session_id]
+        next_level = session_data.get("next_suggested_level")
+        
+        print(f"Escalating hint for session {session_id}, next_level={next_level}, previous hints count={len(session_data.get('hints', []))}")
 
-        # Check if we can escalate further
-        if not session_data.get("next_suggested_level"):
+        # Check if we can escalate further (level 5 is max)
+        if next_level and next_level > SocraticLevel.REVEALING:
             # Already at max level
+            print(f"Already at max level (5), providing answer")
             return SocraticResponse(
                 mode="hint_maxed",
                 hint="The answer is: " + request.correct_answer,
-                misconception=session_data.get("misconception")
+                hint_id=str(uuid.uuid4()),
+                hint_level=5,
+                hint_level_label="revealing",
+                hint_type="answer",
+                misconception=session_data.get("misconception"),
+                next_level_available=False,
+                dialogue_turn=len(session_data.get("hints", [])) + 1,
+                learner_theta=request.theta,
+                confidence=request.confidence
             )
 
         # Request with updated session info

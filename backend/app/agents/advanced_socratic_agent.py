@@ -182,6 +182,8 @@ class AdvancedSocraticAgent:
         escalation = previous_hints_count  # +1 level for each previous hint
         escalation = min(escalation, 4)  # Cap at +4 so we can reach level 5
         final_level = min(base_level + escalation, SocraticLevel.REVEALING)
+        
+        print(f"Hint level determination: base={base_level}, previous_count={previous_hints_count}, escalation={escalation}, final={final_level}")
 
         return final_level
 
