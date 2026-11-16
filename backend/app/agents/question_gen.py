@@ -13,6 +13,7 @@ from typing import Optional
 import httpx
 
 from groq import Groq
+from app.core.config import config, safe_groq_completion, groq_http_client
 
 from app.misconceptions.seed_tags import DEFAULT_TAGS
 
@@ -118,11 +119,11 @@ Respond ONLY with valid JSON (no markdown, no backticks):
     try:
         client = Groq(
             api_key=api_key,
-            http_client=httpx.Client(verify=False)
+            http_client=groq_http_client()
         )
         response = safe_groq_completion(
             client,
-            model="openai/gpt-oss-20b",
+            model=config.GROQ_MODEL,
             max_tokens=1500,
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},

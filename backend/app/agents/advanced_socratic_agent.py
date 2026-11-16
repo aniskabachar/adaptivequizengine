@@ -1,8 +1,11 @@
+import logging
 from datetime import datetime
 from typing import List, Optional
 from app.core.groq_client import get_groq_client
 from app.core.config import config
 import json
+
+logger = logging.getLogger(__name__)
 
 
 class SocraticLevel:
@@ -106,7 +109,7 @@ class AdvancedSocraticAgent:
 
             hint_text = response.choices[0].message.content.strip()
         except Exception as e:
-            print(f"Error generating hint: {e}")
+            logger.error(f"Error generating hint: {e}")
             hint_text = self._get_fallback_hint(hint_level, question, misconception_tag)
 
         # 4. TRACK HINT IN DIALOGUE HISTORY
@@ -182,6 +185,8 @@ class AdvancedSocraticAgent:
         escalation = previous_hints_count  # +1 level for each previous hint
         escalation = min(escalation, 4)  # Cap at +4 so we can reach level 5
         final_level = min(base_level + escalation, SocraticLevel.REVEALING)
+        
+        logger.debug(f"Hint level determination: base={base_level}, previous_count={previous_hints_count}, escalation={escalation}, final={final_level}")
 
         return final_level
 
@@ -346,7 +351,7 @@ Respond with ONLY the misconception, no explanation."""
             if misconception and len(misconception) > 5:
                 return misconception
         except Exception as e:
-            print(f"Error detecting misconception: {e}")
+            logger.error(f"Error detecting misconception: {e}")
 
         return None
 

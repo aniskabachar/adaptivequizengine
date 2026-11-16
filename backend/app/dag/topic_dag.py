@@ -3,7 +3,7 @@ import httpx
 from groq import Groq
 import json
 import logging
-from app.core.config import safe_groq_completion
+from app.core.config import safe_groq_completion, config, groq_http_client
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ class TopicDAGEngine:
             logger.info("Creating Groq client...")
             # Use the same working configuration from direct test
             import httpx
-            http_client = httpx.Client(verify=False, timeout=30.0)
+            http_client = groq_http_client(timeout=30.0)
             client = Groq(api_key=self.api_key, http_client=http_client)
             logger.info("Groq client created successfully")
         except Exception as e:
@@ -64,7 +64,7 @@ Rules:
                 logger.info(f"Attempt {attempt + 1}: Making API call to Groq...")
                 message = safe_groq_completion(
                     client,
-                    model="openai/gpt-oss-20b",
+                    model=config.GROQ_MODEL,
                     max_tokens=1500,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0.3,

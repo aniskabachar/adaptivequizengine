@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import axios, { AxiosInstance } from 'axios';
+import { API_BASE_URL } from "@/lib/apiConfig";
 
 export interface User {
   id?: number;
@@ -23,7 +24,7 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
+const API_URL = API_BASE_URL;
 
 // Create a pre-configured axios instance
 const apiInstance = axios.create({

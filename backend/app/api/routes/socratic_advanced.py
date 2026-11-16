@@ -1,3 +1,4 @@
+import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.schemas.socratic import SocraticRequest, SocraticResponse
@@ -5,6 +6,8 @@ from app.services.advanced_socratic_service import AdvancedSocraticService
 from app.database.session import get_db
 from app.api.endpoints.users import get_current_student
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 service = AdvancedSocraticService()
@@ -43,7 +46,7 @@ async def get_adaptive_hint(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        print(f"Error in get_adaptive_hint: {e}")
+        logger.error(f"Error in get_adaptive_hint: {e}")
         raise HTTPException(status_code=500, detail="Failed to generate hint")
 
 
@@ -75,7 +78,7 @@ async def escalate_hint(
         return hint_response
 
     except Exception as e:
-        print(f"Error in escalate_hint: {e}")
+        logger.error(f"Error in escalate_hint: {e}")
         raise HTTPException(status_code=500, detail="Failed to escalate hint")
 
 
@@ -115,7 +118,7 @@ async def track_hint_outcome(
         return result
 
     except Exception as e:
-        print(f"Error tracking hint outcome: {e}")
+        logger.error(f"Error tracking hint outcome: {e}")
         raise HTTPException(status_code=500, detail="Failed to track outcome")
 
 
@@ -141,7 +144,7 @@ async def get_session_summary(
         return summary
 
     except Exception as e:
-        print(f"Error getting session summary: {e}")
+        logger.error(f"Error getting session summary: {e}")
         raise HTTPException(status_code=500, detail="Failed to get session summary")
 
 
@@ -170,7 +173,7 @@ async def clear_session(
             raise HTTPException(status_code=404, detail="Session not found")
 
     except Exception as e:
-        print(f"Error clearing session: {e}")
+        logger.error(f"Error clearing session: {e}")
         raise HTTPException(status_code=500, detail="Failed to clear session")
 
 
@@ -190,5 +193,5 @@ async def get_service_metrics(
         return metrics
 
     except Exception as e:
-        print(f"Error getting metrics: {e}")
+        logger.error(f"Error getting metrics: {e}")
         raise HTTPException(status_code=500, detail="Failed to get metrics")

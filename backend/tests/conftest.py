@@ -6,6 +6,8 @@ import os
 # is imported for the first time.
 TEST_DB_PATH = os.path.join(os.path.dirname(__file__), "test_sql_app.db")
 os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DB_PATH}"
+# Fixtures log in many times per test run; the per-client limiter would block them
+os.environ["RATE_LIMIT_ENABLED"] = "false"
 if os.path.exists(TEST_DB_PATH):
     os.remove(TEST_DB_PATH)
 

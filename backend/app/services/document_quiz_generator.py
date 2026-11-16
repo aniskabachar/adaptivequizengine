@@ -1,9 +1,13 @@
+import logging
 """Quiz generation service from document content using LLM."""
 
 from typing import List, Dict, Optional
 import json
 from groq import Groq
 import httpx
+from app.core.config import config, groq_http_client
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentQuizGenerator:
@@ -18,7 +22,7 @@ class DocumentQuizGenerator:
         """
         self.client = Groq(
             api_key=api_key,
-            http_client=httpx.Client(verify=False)
+            http_client=groq_http_client()
         )
     
     def extract_topics_and_subtopics(self, document_text: str, max_topics: int = 1) -> Dict:
@@ -77,7 +81,7 @@ Maximum 10 subtopics total. Quality over quantity. Only the most important conce
 
         try:
             response = self.client.chat.completions.create(
-                model="openai/gpt-oss-20b",
+                model=config.GROQ_MODEL,
                 max_tokens=2000,
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"}
@@ -95,7 +99,7 @@ Maximum 10 subtopics total. Quality over quantity. Only the most important conce
             return json.loads(raw, strict=False)
             
         except Exception as e:
-            print(f"Error extracting topics: {e}")
+            logger.error(f"Error extracting topics: {e}")
             # Fallback structure with flat list
             return {
                 "document_title": "Document Content",
@@ -197,7 +201,7 @@ REMEMBER: Correct answer position must be random (A, B, C, or D) - vary it!"""
 
         try:
             response = self.client.chat.completions.create(
-                model="openai/gpt-oss-20b",
+                model=config.GROQ_MODEL,
                 max_tokens=3000,
                 messages=[{"role": "user", "content": prompt}],
                 response_format={"type": "json_object"}
@@ -227,7 +231,7 @@ REMEMBER: Correct answer position must be random (A, B, C, or D) - vary it!"""
             return validated_questions
             
         except Exception as e:
-            print(f"Error generating questions: {e}")
+            logger.error(f"Error generating questions: {e}")
             return []
     
     def generate_complete_quiz(

@@ -1,4 +1,5 @@
-﻿from typing import Optional, Literal
+import logging
+from typing import Optional, Literal
 import uuid
 from datetime import datetime
 
@@ -13,6 +14,8 @@ from app.models.attempt import QuestionAttempt
 from app.models.classroom import Classroom, ClassroomQuiz
 from app.models.proctoring import ProctoringEvent
 from app.models.user import User
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -155,7 +158,7 @@ def record_proctoring_event(
     except Exception as e:
         # Fallback if session_token column doesn't exist yet (migration not run)
         # This will be removed after migration is confirmed to have run
-        print(f"[Proctoring] Warning: session_token query failed, using fallback: {e}")
+        logger.warning(f"[Proctoring] Warning: session_token query failed, using fallback: {e}")
         # Count all violations for this user+quiz (pre-session-based tracking)
         warning_count = db.query(func.count(ProctoringEvent.id)).filter(
             ProctoringEvent.user_id == student.id,

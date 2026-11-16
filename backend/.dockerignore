@@ -1,0 +1,12 @@
+.env
+*.db
+__pycache__/
+*.pyc
+tests/
+scripts/
+stitch/
+migrations/
+*.md
+*.bat
+*.txt
+!requirements.txt

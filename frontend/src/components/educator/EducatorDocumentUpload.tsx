@@ -2,6 +2,7 @@
 
 import React, { useState, useRef } from "react";
 import { Upload, File, X, Loader2, CheckCircle, AlertCircle, FileText } from "lucide-react";
+import { API_BASE_URL } from "@/lib/apiConfig";
 
 interface EducatorDocumentUploadProps {
   onQuizGenerated: (quizData: any) => void;
@@ -96,8 +97,7 @@ export function EducatorDocumentUpload({ onQuizGenerated, onCancel, classroomId 
       formData.append("file", file);
 
       // Call the simple endpoint that does everything in one step
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-      const url = new URL(`${apiUrl}/api/quiz/generate-from-document-simple`);
+      const url = new URL(`${API_BASE_URL}/quiz/generate-from-document-simple`);
       url.searchParams.append("questions_per_topic", questionsPerTopic.toString());
 
       setUploadProgress("Extracting text from PDF...");

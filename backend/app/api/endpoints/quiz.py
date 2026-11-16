@@ -1,12 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-from pydantic import BaseModel
+import logging
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
+from pydantic import Field, BaseModel
 from typing import Optional, List
 from groq import Groq
 import json
 import httpx
 from sqlalchemy.orm import Session
 from sqlalchemy import func, desc
-from app.core.config import resolve_groq_api_key, safe_groq_completion
+from app.core.rate_limit import llm_rate_limit
+from app.core.config import settings, resolve_groq_api_key, safe_groq_completion, config, groq_http_client
 from app.database.session import get_db
 from app.irt.theta_estimator import ThetaEstimator
 from app.models.user import User
@@ -19,7 +21,26 @@ from app.api.endpoints.users import get_current_student, oauth2_scheme, resolve_
 from app.services.document_processor import DocumentProcessor
 from app.services.document_quiz_generator import DocumentQuizGenerator
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
+
+async def read_validated_pdf(file: UploadFile) -> bytes:
+    """Read an uploaded PDF with a hard size cap and a content check.
+
+    Reads at most MAX_UPLOAD_MB + 1 byte so an oversized upload is never
+    fully loaded into memory, and checks the PDF signature instead of
+    trusting the filename alone.
+    """
+    max_bytes = settings.MAX_UPLOAD_MB * 1024 * 1024
+    content = await file.read(max_bytes + 1)
+    if len(content) > max_bytes:
+        raise HTTPException(status_code=413, detail=f"File too large. Maximum size is {settings.MAX_UPLOAD_MB}MB")
+    if not content.startswith(b"%PDF-"):
+        raise HTTPException(status_code=400, detail="Uploaded file is not a valid PDF")
+    return content
+
 
 class QuestionRequest(BaseModel):
     topic: str
@@ -49,7 +70,7 @@ class AnswerRequest(BaseModel):
     explanation: Optional[str] = None
     bloom_level: Optional[str] = None
 
-@router.post("/generate")
+@router.post("/generate", dependencies=[Depends(llm_rate_limit)])
 async def generate_question(req: QuestionRequest, db: Session = Depends(get_db)):
     api_key = resolve_groq_api_key(req.api_key)
     if not api_key:
@@ -58,7 +79,7 @@ async def generate_question(req: QuestionRequest, db: Session = Depends(get_db))
     # Create Groq client with SSL verification disabled to fix Windows certificate issues
     client = Groq(
         api_key=api_key,
-        http_client=httpx.Client(verify=False)
+        http_client=groq_http_client()
     )
     difficulty_label = ThetaEstimator.theta_to_label(req.difficulty)
     avoid = "\n".join(f"- {q}" for q in req.previous_questions[-10:]) if req.previous_questions else "None"
@@ -111,7 +132,7 @@ Calibration guide:
 
     message = safe_groq_completion(
         client,
-        model="openai/gpt-oss-20b",
+        model=config.GROQ_MODEL,
         max_tokens=1500,
         temperature=0.7,
         messages=[{"role": "user", "content": prompt}]
@@ -211,7 +232,7 @@ async def submit_answer(
                 try:
                     groq_client = Groq(
                         api_key=api_key,
-                        http_client=httpx.Client(verify=False)
+                        http_client=groq_http_client()
                     )
                 except Exception:
                     groq_client = None
@@ -299,7 +320,7 @@ async def submit_answer(
     except Exception as _e:
         # Never let SM-2 persistence break the quiz flow
         db.rollback()
-        print(f"[SM-2 auto-persist] warning: {_e}")
+        logger.warning(f"[SM-2 auto-persist] warning: {_e}")
     # ─────────────────────────────────────────────────────────────────────
 
     return {
@@ -466,11 +487,11 @@ class DocumentQuizRequest(BaseModel):
     """Request model for generating quiz from extracted document content."""
     document_text: str
     sections: List[dict]
-    questions_per_topic: int = 5
+    questions_per_topic: int = Field(5, ge=1, le=20)
     api_key: Optional[str] = None
 
 
-@router.post("/upload-document")
+@router.post("/upload-document", dependencies=[Depends(llm_rate_limit)])
 async def upload_document_for_quiz(
     file: UploadFile = File(...),
     api_key: Optional[str] = None
@@ -487,7 +508,7 @@ async def upload_document_for_quiz(
     The document itself is NOT stored - only processed in memory.
     """
     # Validate file type
-    if not file.filename.endswith('.pdf'):
+    if not (file.filename or '').lower().endswith('.pdf'):
         raise HTTPException(
             status_code=400,
             detail="Only PDF files are supported"
@@ -498,7 +519,7 @@ async def upload_document_for_quiz(
     
     try:
         # Read file content
-        file_content = await file.read()
+        file_content = await read_validated_pdf(file)
         
         if len(file_content) > MAX_FILE_SIZE:
             raise HTTPException(
@@ -521,6 +542,8 @@ async def upload_document_for_quiz(
             "message": "Document processed successfully. Use /generate-from-document to create quiz."
         }
         
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -530,7 +553,7 @@ async def upload_document_for_quiz(
         )
 
 
-@router.post("/generate-from-document")
+@router.post("/generate-from-document", dependencies=[Depends(llm_rate_limit)])
 async def generate_quiz_from_document(
     req: DocumentQuizRequest,
     db: Session = Depends(get_db)
@@ -587,10 +610,10 @@ async def generate_quiz_from_document(
         )
 
 
-@router.post("/generate-from-document-simple")
+@router.post("/generate-from-document-simple", dependencies=[Depends(llm_rate_limit)])
 async def generate_quiz_from_document_simple(
     file: UploadFile = File(...),
-    questions_per_topic: int = 5,
+    questions_per_topic: int = Query(5, ge=1, le=20),
     api_key: Optional[str] = None
 ):
     """
@@ -600,7 +623,7 @@ async def generate_quiz_from_document_simple(
     This is a convenience endpoint that internally calls both processing steps.
     """
     # Validate file type
-    if not file.filename.endswith('.pdf'):
+    if not (file.filename or '').lower().endswith('.pdf'):
         raise HTTPException(
             status_code=400,
             detail="Only PDF files are supported"
@@ -616,7 +639,7 @@ async def generate_quiz_from_document_simple(
     
     try:
         # Read and process PDF
-        file_content = await file.read()
+        file_content = await read_validated_pdf(file)
         
         if len(file_content) > MAX_FILE_SIZE:
             raise HTTPException(
@@ -651,6 +674,8 @@ async def generate_quiz_from_document_simple(
             "message": f"Quiz generated successfully from {file.filename}"
         }
         
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

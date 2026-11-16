@@ -1,9 +1,12 @@
+import logging
 from typing import Optional
 from sqlalchemy.orm import Session
 from app.agents.advanced_socratic_agent import AdvancedSocraticAgent, SocraticLevel
 from app.schemas.socratic import SocraticRequest, SocraticResponse
 from app.misconceptions.analyzer import MisconceptionAnalyzer
 import uuid
+
+logger = logging.getLogger(__name__)
 
 
 class AdvancedSocraticService:
@@ -48,7 +51,7 @@ class AdvancedSocraticService:
                     question_options=request.question_options
                 )
             except Exception as e:
-                print(f"Warning: Misconception detection failed: {e}")
+                logger.warning(f"Warning: Misconception detection failed: {e}")
 
         # 2. CHECK FOR PREVIOUS HINTS IN SESSION
         session_id = request.session_id or str(uuid.uuid4())
@@ -59,6 +62,9 @@ class AdvancedSocraticService:
             session_data = self.hint_sessions[session_id]
             previous_hints = session_data.get("hints", [])
             hint_level_override = session_data.get("next_suggested_level")
+            logger.debug(f"Found existing session {session_id}, previous hints count: {len(previous_hints)}, next suggested level: {hint_level_override}")
+        else:
+            logger.debug(f"New session {session_id}, no previous hints")
 
         # 3. GET ADAPTIVE HINT
         hint_response = await self.agent.get_adaptive_hint(
@@ -98,9 +104,9 @@ class AdvancedSocraticService:
             confidence=request.confidence
         )
 
-        print(f"Socratic hint #{hint_response['dialogue_turn']} (level {hint_response['level_label']}) for {request.user_id}")
+        logger.debug(f"Socratic hint #{hint_response['dialogue_turn']} (level {hint_response['level_label']}) for {request.user_id}")
         if misconception:
-            print(f"  Misconception: {misconception}")
+            logger.debug(f"  Misconception: {misconception}")
 
         return response
 
@@ -124,17 +130,30 @@ class AdvancedSocraticService:
 
         if session_id not in self.hint_sessions:
             # No previous hints in this session, start fresh
+            logger.debug(f"No session found for {session_id}, starting fresh")
             return await self.get_adaptive_hint(request, db)
 
         session_data = self.hint_sessions[session_id]
+        next_level = session_data.get("next_suggested_level")
+        
+        logger.debug(f"Escalating hint for session {session_id}, next_level={next_level}, previous hints count={len(session_data.get('hints', []))}")
 
-        # Check if we can escalate further
-        if not session_data.get("next_suggested_level"):
+        # Check if we can escalate further (level 5 is max)
+        if next_level and next_level > SocraticLevel.REVEALING:
             # Already at max level
+            logger.debug(f"Already at max level (5), providing answer")
             return SocraticResponse(
                 mode="hint_maxed",
                 hint="The answer is: " + request.correct_answer,
-                misconception=session_data.get("misconception")
+                hint_id=str(uuid.uuid4()),
+                hint_level=5,
+                hint_level_label="revealing",
+                hint_type="answer",
+                misconception=session_data.get("misconception"),
+                next_level_available=False,
+                dialogue_turn=len(session_data.get("hints", [])) + 1,
+                learner_theta=request.theta,
+                confidence=request.confidence
             )
 
         # Request with updated session info
@@ -172,7 +191,7 @@ class AdvancedSocraticService:
             hint_level=hint_level
         )
 
-        print(f"Tracked hint outcome: effective={did_help}, efficiency={result['efficiency_score']:.1f}")
+        logger.debug(f"Tracked hint outcome: effective={did_help}, efficiency={result['efficiency_score']:.1f}")
 
         return result
 

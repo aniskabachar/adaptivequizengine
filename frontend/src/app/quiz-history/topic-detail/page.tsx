@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { getQuizHistory } from '@/services/quizService';
@@ -47,7 +47,7 @@ interface HistoryData {
   history: Record<string, TopicData>;
 }
 
-export default function TopicDetailPage() {
+function TopicDetailContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { api } = useAuth();
@@ -499,5 +499,13 @@ export default function TopicDetailPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function TopicDetailPage() {
+  return (
+    <Suspense fallback={null}>
+      <TopicDetailContent />
+    </Suspense>
   );
 }

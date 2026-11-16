@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.core.config import config
 from app.database.connection import SessionLocal
 from app.misconceptions.seed_tags import DEFAULT_TAGS, seed_misconception_tags
 from app.models.attempt import QuestionAttempt
@@ -54,7 +55,7 @@ class MisconceptionAnalyzer:
                 "Reply with ONLY the tag, nothing else."
             )
             response = self.groq_client.chat.completions.create(
-                model="openai/gpt-oss-20b",
+                model=config.GROQ_MODEL,
                 max_tokens=10,
                 temperature=0,
                 messages=[{"role": "user", "content": prompt}],

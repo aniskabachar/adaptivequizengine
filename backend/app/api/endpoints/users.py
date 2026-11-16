@@ -9,6 +9,7 @@ from app.database.session import get_db
 from app.models.user import User
 from app.core.security import security_utils
 from app.core.config import settings
+from app.core.rate_limit import auth_rate_limit
 from app.schemas.user_schema import UserCreate, UserLogin, UserResponse, Token, TokenData
 
 router = APIRouter()
@@ -75,7 +76,7 @@ def resolve_user_id_from_token(
             pass
     return explicit_user_id
 
-@router.post("/register", response_model=UserResponse)
+@router.post("/register", response_model=UserResponse, dependencies=[Depends(auth_rate_limit)])
 def register(user_in: UserCreate, db: Session = Depends(get_db)):
     # Check if user already exists
     user = db.query(User).filter(User.email == user_in.email).first()
@@ -97,7 +98,7 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
     db.refresh(db_user)
     return db_user
 
-@router.post("/login", response_model=Token)
+@router.post("/login", response_model=Token, dependencies=[Depends(auth_rate_limit)])
 def login(user_in: UserLogin, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.email == user_in.email).first()
     if not user or not security_utils.verify_password(user_in.password, user.hashed_password):

@@ -1,5 +1,5 @@
 from groq import AsyncGroq
-from app.core.config import config
+from app.core.config import config, groq_async_http_client
 import httpx
 import os
 
@@ -9,11 +9,9 @@ class GroqClient:
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(GroqClient, cls).__new__(cls)
-            # Disable SSL verification for development (Windows certificate issues)
-            # For production, use proper certificate handling
             cls._instance.client = AsyncGroq(
                 api_key=config.GROQ_API_KEY,
-                http_client=httpx.AsyncClient(verify=False)
+                http_client=groq_async_http_client()
             )
         return cls._instance
 

@@ -1,9 +1,12 @@
+import logging
 """Document processing service for extracting text from PDF files."""
 
 from typing import List, Dict, Optional
 import PyPDF2
 import io
 import re
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentProcessor:
@@ -39,7 +42,7 @@ class DocumentProcessor:
                     if text.strip():
                         extracted_text.append(f"--- Page {page_num + 1} ---\n{text}")
                 except Exception as e:
-                    print(f"Warning: Could not extract text from page {page_num + 1}: {e}")
+                    logger.warning(f"Warning: Could not extract text from page {page_num + 1}: {e}")
                     continue
             
             full_text = "\n\n".join(extracted_text)

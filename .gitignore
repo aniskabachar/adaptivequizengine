@@ -55,3 +55,7 @@ backend/PROCTORING_FIX_SUMMARY.md
 backend/PROCTORING_SYSTEM.md
 frontend/DESIGN_SYSTEM.md
 frontend/PROCTORING_THEME_UPDATE.md
+# local machine / scratch files
+desktop.ini
+scratch/
+backend/on Plan.txt

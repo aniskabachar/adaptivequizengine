@@ -4,7 +4,8 @@ from typing import Optional
 import httpx
 from groq import Groq
 
-from app.core.config import resolve_groq_api_key
+from app.core.rate_limit import llm_rate_limit
+from app.core.config import resolve_groq_api_key, config, groq_http_client
 from app.database.session import get_db
 from app.api.endpoints.users import get_current_teacher
 from app.models.classroom import Classroom, ClassEnrollment
@@ -230,7 +231,7 @@ def get_educator_dashboard(
         "students": student_records
     }
 
-@router.get("/re-teaching")
+@router.get("/re-teaching", dependencies=[Depends(llm_rate_limit)])
 def get_re_teaching_recommendations(
     topic: str = Query("Computer Science", description="The learning topic to generate tips for"),
     api_key: Optional[str] = Query(None, description="Optional per-request Groq API key override"),
@@ -283,10 +284,10 @@ Format the output clearly and professionally for a classroom teacher."""
     try:
         client = Groq(
             api_key=api_key,
-            http_client=httpx.Client(verify=False)
+            http_client=groq_http_client()
         )
         message = client.chat.completions.create(
-            model="openai/gpt-oss-20b",
+            model=config.GROQ_MODEL,
             max_tokens=2000,
             messages=[{"role": "user", "content": prompt}]
         )

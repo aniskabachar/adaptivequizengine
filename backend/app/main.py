@@ -1,13 +1,22 @@
+import os
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import inspect, text
 from app.api import router
+from app.core.config import settings
 from app.database.connection import engine
 from app.database.session import get_db
 from app.misconceptions.seed_tags import seed_misconception_tags
 from app.models import Base
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
 def _ensure_columns(table_name: str, column_defs: dict) -> None:
@@ -81,7 +90,7 @@ def _run_lightweight_migrations() -> None:
             WHERE classroom_quiz_id IS NULL
         """))
         if result.rowcount > 0:
-            print(f"Cleaned up {result.rowcount} orphaned proctoring events with NULL classroom_quiz_id")
+            logger.info(f"Cleaned up {result.rowcount} orphaned proctoring events with NULL classroom_quiz_id")
     
     # Note: session_id column is kept for backward compatibility but is no longer used
     # New code should use attempt_id instead. The session_id column can be removed later
@@ -144,10 +153,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="AdaptiveTutor Backend", version="1.0.0", lifespan=lifespan)
 
-# Enable CORS for Next.js frontend
+# Only the configured frontend origins may call the API (set ALLOWED_ORIGINS)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.allowed_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -158,3 +167,15 @@ app.include_router(router.api_router, prefix="/api")
 @app.get("/")
 def read_root():
     return {"message": "Welcome to AdaptiveTutor API"}
+
+
+@app.get("/health")
+def health_check():
+    """Liveness/readiness probe for the hosting platform."""
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        return {"status": "ok", "database": "ok"}
+    except Exception:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(status_code=503, content={"status": "error", "database": "unreachable"})
