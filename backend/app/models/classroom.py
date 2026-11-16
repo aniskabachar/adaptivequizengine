@@ -53,4 +53,5 @@ class ClassroomQuiz(Base):
     created_at = Column(DateTime, default=utcnow)
 
     classroom = relationship("Classroom", back_populates="quizzes")
-    proctoring_events = relationship("ProctoringEvent", back_populates="quiz")
+    # Deleting a quiz (or its classroom) also deletes its proctoring events
+    proctoring_events = relationship("ProctoringEvent", back_populates="quiz", cascade="all, delete-orphan")
