@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from datetime import datetime, timedelta
 from typing import Optional
 import httpx
 from groq import Groq
@@ -11,235 +12,249 @@ from app.api.endpoints.users import get_current_teacher
 from app.models.classroom import Classroom, ClassEnrollment
 from app.models.user import User
 from app.models.attempt import QuestionAttempt
-from app.mastery.mastery_calculator import MasteryCalculator
-from app.misconceptions.analyzer import MisconceptionAnalyzer
+from app.core.time_utils import utcnow
 
 router = APIRouter()
 
+def _theta_str(value: float) -> str:
+    return f"+{value:.2f}" if value >= 0 else f"{value:.2f}"
+
+
+def _theta_to_mastery(theta: Optional[float]) -> float:
+    """Map IRT ability (theta, roughly -3..3) to a 0-100 mastery percentage."""
+    if theta is None:
+        return 0.0
+    return max(0.0, min(100.0, ((theta + 3.0) / 6.0) * 100.0))
+
+
+def _severity(pct: int) -> str:
+    return "high" if pct >= 35 else "medium" if pct >= 20 else "low"
+
+
+def _teacher_scope(teacher: User, db: Session):
+    """Approved students in this teacher's classrooms, plus all of their attempts.
+
+    Everything on the educator dashboard is limited to these students, so one
+    tutor never sees another tutor's students or their answers.
+    """
+    class_ids = [row.id for row in db.query(Classroom.id).filter(Classroom.teacher_id == teacher.id).all()]
+    if not class_ids:
+        return [], []
+    student_ids = [
+        row.student_id
+        for row in db.query(ClassEnrollment.student_id)
+        .filter(ClassEnrollment.classroom_id.in_(class_ids), ClassEnrollment.status == "approved")
+        .distinct()
+        .all()
+    ]
+    if not student_ids:
+        return [], []
+    students = (
+        db.query(User)
+        .filter(User.id.in_(student_ids), User.role == "student")
+        .order_by(User.name)
+        .all()
+    )
+    attempts = (
+        db.query(QuestionAttempt)
+        .filter(QuestionAttempt.user_id.in_([s.id for s in students]))
+        .all()
+    )
+    return students, attempts
+
+
+def _matches_topic(attempt: QuestionAttempt, topic: str) -> bool:
+    return (attempt.topic or "").strip().lower() == topic.strip().lower()
+
+
+def _class_misconceptions(attempts: list) -> list:
+    """Most common misconceptions among this class's wrong answers."""
+    tagged = [
+        a.misconception.strip()
+        for a in attempts
+        if a.is_correct is False and a.misconception and a.misconception.strip()
+    ]
+    if not tagged:
+        return []
+    counts: dict = {}
+    for text in tagged:
+        counts[text] = counts.get(text, 0) + 1
+    items = []
+    for text, count in sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:8]:
+        pct = int(round(count / len(tagged) * 100))
+        items.append({"issue": text, "pct": pct, "count": count, "severity": _severity(pct)})
+    return items
+
+
+def _sort_key(attempt: QuestionAttempt):
+    return attempt.timestamp or datetime.min
+
+
 @router.get("/dashboard")
 def get_educator_dashboard(
-    topic: str = Query("Computer Science", description="The learning topic to analyze"),
+    topic: Optional[str] = Query(None, description="Topic to analyze; leave empty for all topics"),
     teacher: User = Depends(get_current_teacher),
     db: Session = Depends(get_db)
 ):
+    """Class-level and student-level analytics for the tutor's own enrolled students.
+
+    All numbers are computed from real attempts; when there is no data yet the
+    response says so (``empty_reason``) instead of showing made-up figures.
     """
-    Retrieves class-level and student-level educator analytics.
-    If no student attempt data exists in the database, returns a populated mock fallback.
-    """
-    teacher_class_ids = [
-        item.id
-        for item in db.query(Classroom.id).filter(Classroom.teacher_id == teacher.id).all()
+    topic = (topic or "").strip()
+    students, all_attempts = _teacher_scope(teacher, db)
+
+    # Topics the class has practised, most active first (for the topic picker)
+    topic_counts: dict = {}
+    for a in all_attempts:
+        if a.topic:
+            topic_counts[a.topic] = topic_counts.get(a.topic, 0) + 1
+    available_topics = [
+        {"topic": name, "attempts": count}
+        for name, count in sorted(topic_counts.items(), key=lambda kv: kv[1], reverse=True)
     ]
 
-    # Find approved students enrolled in teacher's classes
-    approved_student_ids = [
-        item.student_id
-        for item in db.query(ClassEnrollment.student_id)
-        .filter(
-            ClassEnrollment.classroom_id.in_(teacher_class_ids),
-            ClassEnrollment.status == "approved",
-        )
-        .distinct()
-        .all()
-    ] if teacher_class_ids else []
+    attempts = [a for a in all_attempts if _matches_topic(a, topic)] if topic else all_attempts
 
-    students_in_db = (
-        db.query(User)
-        .filter(User.id.in_(approved_student_ids), User.role == "student")
-        .all()
-    ) if approved_student_ids else []
-
-    # Demo Fallback: if teacher has no enrolled students, get all student users in DB
-    if not students_in_db:
-        students_in_db = db.query(User).filter(User.role == "student").all()
-
-    student_ids = [s.id for s in students_in_db]
-
-    # Fetch attempts for these students on this topic (regardless of classroom link)
-    attempts = []
-    if student_ids:
-        attempts = (
-            db.query(QuestionAttempt)
-            .filter(
-                QuestionAttempt.user_id.in_(student_ids),
-                QuestionAttempt.topic == topic,
-            )
-            .all()
-        )
-
-    # 2. Check if we should fall back to mock data metrics, but referencing REAL student users
-    if len(attempts) == 0:
-        import random
-        # Seed generator using teacher ID + topic hash for visual stability per session
-        random.seed(teacher.id + hash(topic))
-        
-        mock_students = []
-        for student in students_in_db:
-            mastery = random.randint(35, 88)
-            theta_val = random.uniform(-0.5, 1.2)
-            theta_str = f"+{theta_val:.2f}" if theta_val >= 0 else f"{theta_val:.2f}"
-            mock_students.append({
-                "id": student.id,
-                "name": student.name,
-                "email": student.email,
-                "mastery": mastery,
-                "theta": theta_str,
-                "velocity": random.choice(["Fast", "Medium", "Slow"]),
-                "trend": random.choice(["up", "down", "stable"]),
-                "topics": random.randint(2, 9)
-            })
-
-        # Fallback if DB is completely empty of student users
-        if not mock_students:
-            mock_students = [
-                {"id": 999, "name": "Aisha Kumar", "mastery": 82, "theta": "+0.91", "velocity": "Fast", "trend": "up", "topics": 8},
-                {"id": 998, "name": "Marcus Tee", "mastery": 74, "theta": "+0.62", "velocity": "Fast", "trend": "up", "topics": 7}
-            ]
-
-        avg_mastery = int(sum(s["mastery"] for s in mock_students) / len(mock_students))
-        return {
-            "is_mock": True,
-            "kpis": {
-                "active_students": str(len(mock_students)),
-                "avg_class_mastery": f"{avg_mastery}%",
-                "active_misconceptions": "4",
-                "avg_theta_velocity": "+0.18"
-            },
-            "topic_perf": [
-                {"topic": "Fractions", "score": 85},
-                {"topic": "Equations", "score": 62},
-                {"topic": "Ratios", "score": 71},
-                {"topic": "Geometry", "score": 45},
-                {"topic": "Statistics", "score": 58},
-                {"topic": "Algebra", "score": 39}
-            ],
-            "misconceptions": [
-                {"issue": "Adding unlike denominators", "pct": 42, "severity": "high"},
-                {"issue": "Area vs. Perimeter confusion", "pct": 28, "severity": "medium"},
-                {"issue": "Sign errors in algebra", "pct": 35, "severity": "high"},
-                {"issue": "Decimal place value", "pct": 19, "severity": "low"}
-            ],
-            "students": mock_students
-        }
-    
-    mastery_calc = MasteryCalculator()
-    misc_analyzer = MisconceptionAnalyzer(db=db)
-    
     student_records = []
-    total_mastery = 0.0
-    
-    for student in students_in_db:
-        student_attempts = [a for a in attempts if a.user_id == student.id]
-        if not student_attempts:
+    active_mastery = []
+    for student in students:
+        mine = sorted((a for a in attempts if a.user_id == student.id), key=_sort_key)
+        if not mine:
             student_records.append({
-                "id": student.id,
-                "name": student.name,
-                "email": student.email,
-                "mastery": 0,
-                "theta": "0.00",
-                "velocity": "Medium",
-                "trend": "stable",
-                "topics": 0
+                "id": student.id, "name": student.name, "email": student.email,
+                "mastery": 0, "theta": "0.00", "theta_change": 0.0, "velocity": "No data",
+                "trend": "stable", "topics": 0, "attempts": 0, "accuracy": 0, "last_active": None,
             })
             continue
-            
-        mastery = mastery_calc.calculate_mastery(student.id, topic, db=db)
-        total_mastery += mastery
-        
-        # Latest theta
-        latest_attempt = sorted(student_attempts, key=lambda x: x.timestamp or 0, reverse=True)[0]
-        theta_val = latest_attempt.theta_after if latest_attempt.theta_after is not None else 0.0
-        theta_str = f"+{theta_val:.2f}" if theta_val >= 0 else f"{theta_val:.2f}"
-        
-        # Velocity and Trend
-        valid_diffs = [
-            (a.theta_after if a.theta_after is not None else 0.0) - 
-            (a.theta_before if a.theta_before is not None else 0.0) 
-            for a in student_attempts
-        ]
-        avg_diff = sum(valid_diffs) / len(valid_diffs) if valid_diffs else 0.0
-        if avg_diff > 0.05:
-            velocity = "Fast"
-        elif avg_diff < -0.05:
-            velocity = "Slow"
-        else:
-            velocity = "Medium"
-            
-        trend = "stable"
-        if len(student_attempts) > 1:
-            sorted_attempts = sorted(student_attempts, key=lambda x: x.timestamp or 0)
-            t_last = sorted_attempts[-1].theta_after if sorted_attempts[-1].theta_after is not None else 0.0
-            t_prev = sorted_attempts[-2].theta_after if sorted_attempts[-2].theta_after is not None else 0.0
-            if t_last > t_prev + 0.01:
-                trend = "up"
-            elif t_last < t_prev - 0.01:
-                trend = "down"
-                
-        # Count mastered subtopics (subtopics where they have a correct attempt)
-        mastered_subtopics = len(set(a.subtopic for a in student_attempts if a.is_correct))
-        
+
+        # Latest ability per topic -> mastery (averaged across topics in the all-topics view)
+        latest_by_topic: dict = {}
+        for a in mine:
+            latest_by_topic[(a.topic or "").lower()] = a
+        thetas = [a.theta_after for a in latest_by_topic.values() if a.theta_after is not None]
+        theta_val = sum(thetas) / len(thetas) if thetas else 0.0
+        mastery = sum(_theta_to_mastery(t) for t in thetas) / len(thetas) if thetas else 0.0
+        active_mastery.append(mastery)
+
+        deltas = [(a.theta_after or 0.0) - (a.theta_before or 0.0) for a in mine]
+        avg_delta = sum(deltas) / len(deltas)
+        velocity = "Fast" if avg_delta > 0.05 else "Slow" if avg_delta < -0.05 else "Steady"
+        recent = mine[-5:]
+        theta_change = (recent[-1].theta_after or 0.0) - (recent[0].theta_before or 0.0)
+        trend = "up" if theta_change > 0.01 else "down" if theta_change < -0.01 else "stable"
+        correct = sum(1 for a in mine if a.is_correct)
+
         student_records.append({
             "id": student.id,
             "name": student.name,
             "email": student.email,
             "mastery": int(round(mastery)),
-            "theta": theta_str,
+            "theta": _theta_str(theta_val),
+            "theta_change": round(theta_change, 2),
             "velocity": velocity,
             "trend": trend,
-            "topics": mastered_subtopics
+            "topics": len({a.subtopic for a in mine if a.is_correct and a.subtopic}),
+            "attempts": len(mine),
+            "accuracy": int(round(correct / len(mine) * 100)),
+            "last_active": mine[-1].timestamp.isoformat() if mine[-1].timestamp else None,
         })
-        
-    avg_class_mastery_val = int(round(total_mastery / len(student_records))) if student_records else 0
-    
-    # Active misconceptions list & count
-    active_misc_list = misc_analyzer.analyze_class_misconceptions(topic, db=db)
-    active_misc_count = len(active_misc_list)
-    
-    # Avg theta velocity
-    all_velocities = [
-        (a.theta_after if a.theta_after is not None else 0.0) - 
-        (a.theta_before if a.theta_before is not None else 0.0) 
-        for a in attempts
-    ]
-    avg_theta_velocity_val = sum(all_velocities) / len(all_velocities) if all_velocities else 0.0
-    avg_theta_velocity_str = f"+{avg_theta_velocity_val:.2f}" if avg_theta_velocity_val >= 0 else f"{avg_theta_velocity_val:.2f}"
-    
-    # Topic Mastery Distribution (Group by subtopic)
-    subtopic_attempts = {}
+
+    active_students = [s for s in student_records if s["attempts"] > 0]
+    avg_mastery = int(round(sum(active_mastery) / len(active_mastery))) if active_mastery else 0
+    deltas = [(a.theta_after or 0.0) - (a.theta_before or 0.0) for a in attempts]
+    avg_velocity = sum(deltas) / len(deltas) if deltas else 0.0
+    misconceptions = _class_misconceptions(attempts)
+
+    # Accuracy per subtopic (one topic) or per topic (all topics)
+    groups: dict = {}
     for a in attempts:
-        subtopic_attempts.setdefault(a.subtopic, []).append(a)
-        
-    topic_perf = []
-    for sub, atts in subtopic_attempts.items():
-        sub_correct = sum(1 for a in atts if a.is_correct)
-        sub_pct = int(round((sub_correct / len(atts)) * 100))
-        topic_perf.append({
-            "topic": sub,
-            "score": sub_pct
-        })
-        
+        key = (a.subtopic or "General") if topic else (a.topic or "Other")
+        groups.setdefault(key, []).append(a)
+    topic_perf = sorted(
+        (
+            {
+                "topic": name,
+                "score": int(round(sum(1 for a in items if a.is_correct) / len(items) * 100)),
+                "attempts": len(items),
+            }
+            for name, items in groups.items()
+        ),
+        key=lambda item: item["attempts"],
+        reverse=True,
+    )[:12]
+
+    # Activity insights from real timestamps
+    now = utcnow()
+    day_ago, week_ago = now - timedelta(days=1), now - timedelta(days=7)
+    active_today = {a.user_id for a in attempts if a.timestamp and a.timestamp >= day_ago}
+    week = [a for a in attempts if a.timestamp and a.timestamp >= week_ago]
+    improvers = sorted(
+        (s for s in active_students if s["theta_change"] > 0),
+        key=lambda s: s["theta_change"],
+        reverse=True,
+    )
+    top = improvers[0] if improvers else None
+
+    if not students:
+        empty_reason = "no_students"
+    elif not attempts:
+        empty_reason = "no_attempts"
+    else:
+        empty_reason = None
+
     return {
         "is_mock": False,
+        "empty_reason": empty_reason,
+        "topic": topic or None,
+        "available_topics": available_topics,
         "kpis": {
-            "active_students": str(len(student_records)),
-            "avg_class_mastery": f"{avg_class_mastery_val}%",
-            "active_misconceptions": str(active_misc_count),
-            "avg_theta_velocity": avg_theta_velocity_str
+            "active_students": f"{len(active_students)}/{len(students)}",
+            "avg_class_mastery": f"{avg_mastery}%",
+            "active_misconceptions": str(len(misconceptions)),
+            "avg_theta_velocity": _theta_str(avg_velocity),
         },
         "topic_perf": topic_perf,
-        "misconceptions": active_misc_list,
-        "students": student_records
+        "group_label": "Subtopic" if topic else "Topic",
+        "misconceptions": misconceptions,
+        "students": student_records,
+        "insights": {
+            "top_improver": (
+                {"id": top["id"], "name": top["name"], "email": top["email"], "theta_change": top["theta_change"]}
+                if top else None
+            ),
+            "active_last_24h": len(active_today),
+            "attempts_last_7d": len(week),
+            "accuracy_last_7d": (
+                int(round(sum(1 for a in week if a.is_correct) / len(week) * 100)) if week else None
+            ),
+        },
     }
+
+
+def _group_by_subtopic(attempts: list) -> dict:
+    groups: dict = {}
+    for a in attempts:
+        groups.setdefault(a.subtopic or "General", []).append(a)
+    return groups
+
 
 @router.get("/re-teaching", dependencies=[Depends(llm_rate_limit)])
 def get_re_teaching_recommendations(
-    topic: str = Query("Computer Science", description="The learning topic to generate tips for"),
+    topic: Optional[str] = Query(None, description="Topic to generate tips for; empty for all topics"),
     api_key: Optional[str] = Query(None, description="Optional per-request Groq API key override"),
+    teacher: User = Depends(get_current_teacher),
     db: Session = Depends(get_db)
 ):
     """
     Queries Groq LLM to generate a customized re-teaching plan based on class misconceptions.
     """
+    topic = (topic or "").strip()
+    _, all_attempts = _teacher_scope(teacher, db)
+    class_attempts = [a for a in all_attempts if _matches_topic(a, topic)] if topic else all_attempts
+    if not topic:
+        topic = "the topics this class has practised"
+
     api_key = resolve_groq_api_key(api_key)
     if not api_key:
         return {
@@ -251,19 +266,26 @@ def get_re_teaching_recommendations(
                               f"3. **Address Common Gaps**: Reinforce connections between theory and hands-on exercises."
         }
         
-    misc_analyzer = MisconceptionAnalyzer(db=db)
-    misconceptions = misc_analyzer.analyze_class_misconceptions(topic, db=db)
-    
-    if not misconceptions:
-        misconceptions = [
-            {"issue": "Conceptual gaps in foundational subtopics", "pct": 40, "severity": "high"},
-            {"issue": "Procedural confusion or sign errors", "pct": 25, "severity": "medium"}
-        ]
-        
-    misconceptions_str = "\n".join(
-        f"- {m['issue']} (Impacts {m['pct']}% of incorrect answers, Severity: {m['severity']})"
-        for m in misconceptions
-    )
+    misconceptions = _class_misconceptions(class_attempts)
+    weak_areas = sorted(
+        (
+            (sub, sum(1 for a in items if a.is_correct) / len(items), len(items))
+            for sub, items in _group_by_subtopic(class_attempts).items()
+        ),
+        key=lambda item: item[1],
+    )[:4]
+
+    if misconceptions:
+        misconceptions_str = "\n".join(
+            f"- {m['issue']} (Impacts {m['pct']}% of incorrect answers, Severity: {m['severity']})"
+            for m in misconceptions
+        )
+    else:
+        misconceptions_str = "- No tagged misconceptions recorded for this class yet; base the plan on the weakest areas below and on errors commonly seen in this topic."
+    if weak_areas:
+        misconceptions_str += "\n\nWeakest areas in this class (accuracy, number of answers):\n" + "\n".join(
+            f"- {sub}: {round(acc * 100)}% correct over {n} answers" for sub, acc, n in weak_areas
+        )
     
     prompt = f"""You are an expert tutor and educational psychologist.
 The teacher requires an AI-driven re-teaching recommendation plan for their class.

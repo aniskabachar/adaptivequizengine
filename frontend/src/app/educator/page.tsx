@@ -13,7 +13,9 @@ const barColor = (score: number) => score >= 70 ? "var(--primary)" : score >= 50
 export default function EducatorPage() {
   const { user, isLoading: authLoading } = useAuth();
   const router = useRouter();
-  const [selectedTopic, setSelectedTopic] = useState("Computer Science");
+  // "" means all topics the class has practised
+  const [selectedTopic, setSelectedTopic] = useState("");
+  const topicLabel = selectedTopic || "all topics";
   const [dashboardData, setDashboardData] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
@@ -79,16 +81,16 @@ export default function EducatorPage() {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `${selectedTopic.replace(/\s+/g, "-").toLowerCase()}-students.csv`;
+    anchor.download = `${(selectedTopic || "all-topics").replace(/\s+/g, "-").toLowerCase()}-students.csv`;
     anchor.click();
     URL.revokeObjectURL(url);
   };
 
   const handleCongratulate = () => {
-    const topStudent = [...students].sort((a: any, b: any) => (b.mastery || 0) - (a.mastery || 0))[0];
+    const topStudent = dashboardData?.insights?.top_improver;
     if (!topStudent) return;
     if (topStudent.email) {
-      window.location.href = `mailto:${topStudent.email}?subject=${encodeURIComponent(`Great progress in ${selectedTopic}`)}&body=${encodeURIComponent(`Hi ${topStudent.name},\n\nGreat work on your recent progress in ${selectedTopic}. Keep it up!\n`)}`;
+      window.location.href = `mailto:${topStudent.email}?subject=${encodeURIComponent(`Great progress in ${topicLabel}`)}&body=${encodeURIComponent(`Hi ${topStudent.name},\n\nGreat work on your recent progress in ${topicLabel}. Keep it up!\n`)}`;
       return;
     }
     openStudentAnalytics(topStudent);
@@ -102,11 +104,6 @@ export default function EducatorPage() {
     setSelectedStudent(student);
     setStudentAnalytics(null);
     setStudentAnalyticsError(null);
-
-    if (!student.id) {
-      setStudentAnalyticsError("This is mock dashboard data, so no saved student analytics are available yet.");
-      return;
-    }
 
     setStudentAnalyticsLoading(true);
     try {
@@ -123,7 +120,12 @@ export default function EducatorPage() {
   if (isLoading || !dashboardData) return <Loading label="Loading educator intelligence..." />;
 
   const { kpis, topic_perf, misconceptions, students } = dashboardData;
+  const insights = dashboardData.insights || {};
+  const availableTopics: { topic: string; attempts: number }[] = dashboardData.available_topics || [];
+  const groupLabel = dashboardData.group_label || "Subtopic";
   const filteredStudents = students.filter((s: any) => s.name.toLowerCase().includes(searchTerm.toLowerCase()));
+  const topGap = misconceptions[0];
+  const topImprover = insights.top_improver;
 
   return (
     <div className="app-page">
@@ -132,14 +134,24 @@ export default function EducatorPage() {
           <div>
             <h1 className="chunky-heading" style={{ fontSize: "var(--heading-lg)", margin: 0 }}>Educator Intelligence Hub</h1>
             <p style={{ color: "var(--muted)", fontSize: "var(--text-base)", lineHeight: "var(--leading-relaxed)", maxWidth: "44rem", margin: "var(--space-2) 0 0" }}>
-              Real-time cohort tracking and AI-driven pedagogical recommendations for {selectedTopic}.
+              Real-time cohort tracking and AI-driven pedagogical recommendations for {topicLabel}, based on the students enrolled in your classes.
             </p>
-            {dashboardData.is_mock && <span className="badge badge-amber" style={{ marginTop: "var(--space-3)" }}>Mock Fallback</span>}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap" }}>
             <div style={{ display: "flex", gap: "var(--space-2)", alignItems: "center", background: "var(--surface)", border: "1px solid var(--outline)", borderRadius: "var(--radius-full)", padding: "var(--space-2) var(--space-3)" }}>
               <span style={{ color: "var(--muted)", fontSize: "var(--text-xs)", fontWeight: "var(--font-extrabold)" }}>Topic</span>
-              <input value={selectedTopic} onChange={(e) => setSelectedTopic(e.target.value)} onKeyDown={(e) => e.key === "Enter" && fetchDashboardData(selectedTopic)} style={{ border: 0, outline: "none", width: "150px", fontWeight: "var(--font-bold)", background: "transparent" }} />
+              <select
+                aria-label="Topic"
+                value={selectedTopic}
+                onChange={(e) => { setSelectedTopic(e.target.value); fetchDashboardData(e.target.value); }}
+                style={{ border: 0, outline: "none", maxWidth: "200px", fontWeight: "var(--font-bold)", background: "transparent" }}
+              >
+                <option value="">All topics</option>
+                {availableTopics.map((t) => (
+                  <option key={t.topic} value={t.topic}>{t.topic} ({t.attempts})</option>
+                ))}
+                {selectedTopic && !availableTopics.some((t) => t.topic === selectedTopic) && <option value={selectedTopic}>{selectedTopic}</option>}
+              </select>
               <button onClick={() => fetchDashboardData(selectedTopic)} title="Refresh stats" style={{ border: 0, background: "transparent", color: "var(--primary)", display: "grid", placeItems: "center" }}>
                 <RefreshCw size={15} />
               </button>
@@ -150,9 +162,23 @@ export default function EducatorPage() {
           </div>
         </header>
 
+        {dashboardData.empty_reason && (
+          <div className="card" style={{ background: "var(--surface-mid)", marginBottom: "var(--space-6)", display: "flex", gap: "var(--space-3)", alignItems: "center", flexWrap: "wrap", justifyContent: "space-between" }}>
+            <div>
+              <strong>{dashboardData.empty_reason === "no_students" ? "No enrolled students yet" : `No answers yet for ${topicLabel}`}</strong>
+              <p style={{ color: "var(--muted)", margin: "var(--space-1) 0 0" }}>
+                {dashboardData.empty_reason === "no_students"
+                  ? "Create a class and approve join requests. Stats appear here as soon as your students start answering questions."
+                  : "Your students haven't practised this yet. Pick another topic or assign a classroom quiz."}
+              </p>
+            </div>
+            {dashboardData.empty_reason === "no_students" && <Link href="/classes" className="neo-btn neo-btn-primary">Manage Classes <ChevronRight size={15} /></Link>}
+          </div>
+        )}
+
         <section style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "var(--space-4)", marginBottom: "var(--space-6)" }}>
           {[
-            { icon: Users, label: "Active Students", value: kpis.active_students, sub: "attempted questions", wash: "var(--blue-soft)", color: "var(--primary)" },
+            { icon: Users, label: "Active Students", value: kpis.active_students, sub: "practised / enrolled", wash: "var(--blue-soft)", color: "var(--primary)" },
             { icon: BookOpen, label: "Avg Class Mastery", value: kpis.avg_class_mastery, sub: "overall learning rate", wash: "var(--success-soft)", color: "var(--success)" },
             { icon: AlertTriangle, label: "Active Misconceptions", value: kpis.active_misconceptions, sub: "unique gaps detected", wash: "var(--pink-soft)", color: "var(--coral)" },
             { icon: TrendingUp, label: "Avg Theta Velocity", value: kpis.avg_theta_velocity, sub: "ability delta", wash: "var(--primary-soft)", color: "var(--primary-strong)" },
@@ -174,17 +200,18 @@ export default function EducatorPage() {
           <div style={{ display: "grid", gap: "var(--space-6)" }}>
             <div className="glass-card">
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "var(--space-4)", flexWrap: "wrap", marginBottom: "var(--space-5)" }}>
-                <h2 style={{ fontSize: "var(--text-xl)", fontWeight: "var(--font-black)", margin: 0 }}>Class Pulse: Subtopic Mastery</h2>
+                <h2 style={{ fontSize: "var(--text-xl)", fontWeight: "var(--font-black)", margin: 0 }}>Class Pulse: {groupLabel} Accuracy</h2>
                 <div style={{ display: "flex", gap: "var(--space-3)", color: "var(--muted)", fontSize: "var(--text-sm)", fontWeight: "var(--font-bold)" }}>
                   <Legend color="var(--coral)" label="Needs Attention" />
                   <Legend color="var(--primary)" label="Mastered" />
                 </div>
               </div>
+              {topic_perf.length === 0 && <p style={{ color: "var(--muted)", margin: 0 }}>No answers recorded yet.</p>}
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "var(--space-4)" }}>
                 {topic_perf.map((topic: any) => (
                   <div key={topic.topic} style={{ background: "var(--surface-low)", borderLeft: `var(--space-1) solid ${barColor(topic.score)}`, borderRadius: "var(--radius-lg)", padding: "var(--space-4)" }}>
                     <p style={{ color: "var(--muted)", fontSize: "var(--text-xs)", fontWeight: "var(--font-black)", textTransform: "uppercase", margin: 0 }}>{topic.topic}</p>
-                    <p style={{ fontSize: "var(--text-lg)", fontWeight: "var(--font-black)", margin: "var(--space-2) 0 var(--space-3)" }}>{topic.score}%</p>
+                    <p style={{ fontSize: "var(--text-lg)", fontWeight: "var(--font-black)", margin: "var(--space-2) 0 var(--space-3)" }}>{topic.score}% <span style={{ color: "var(--muted)", fontSize: "var(--text-xs)", fontWeight: "var(--font-bold)" }}>of {topic.attempts}</span></p>
                     <div className="progress-track" style={{ height: "var(--space-1)" }}>
                       <div className="progress-fill" style={{ width: `${topic.score}%`, background: barColor(topic.score) }} />
                     </div>
@@ -255,7 +282,7 @@ export default function EducatorPage() {
                 </button>
               </div>
               <div style={{ background: "var(--surface-low)", border: "1px solid var(--outline)", borderRadius: "var(--radius-xl)", padding: "var(--space-5)", minHeight: "var(--space-20)", color: "var(--muted)", lineHeight: "var(--leading-relaxed)" }}>
-                {isGenLoading ? "Analyzing conceptual gaps and formulating activities..." : reTeachingText ? <FormattedPlan text={reTeachingText} /> : `Generate a customized remedial instruction plan for ${selectedTopic} based on class misconceptions.`}
+                {isGenLoading ? "Analyzing conceptual gaps and formulating activities..." : reTeachingText ? <FormattedPlan text={reTeachingText} /> : `Generate a customized remedial instruction plan for ${topicLabel} based on your class's misconceptions and weakest areas.`}
               </div>
             </div>
           </div>
@@ -280,33 +307,42 @@ export default function EducatorPage() {
             <InsightCard
               tone="red"
               label="Critical Gap"
-              title={misconceptions[0]?.issue || "Misconception cluster"}
-              desc={`${misconceptions[0]?.pct || 65}% of attempts suggest this area needs re-teaching.`}
+              title={topGap ? topGap.issue : "No misconceptions detected yet"}
+              desc={topGap
+                ? `Behind ${topGap.pct}% of tagged wrong answers (${topGap.count} answer${topGap.count === 1 ? "" : "s"}).`
+                : "Misconceptions show up here once students start getting questions wrong."}
               button="Remediate Now"
               onClick={() => handleFetchReTeaching(true)}
               loading={isGenLoading}
+              disabled={dashboardData.empty_reason === "no_students"}
             />
             <InsightCard
               tone="purple"
               label="Growth Trend"
-              title="Lexical Diversity"
-              desc="Several learners have shown stronger use of advanced phrasing across recent attempts."
+              title={topImprover ? `${topImprover.name} is improving` : "No improvement trend yet"}
+              desc={topImprover
+                ? `Ability rose by +${topImprover.theta_change.toFixed(2)} over their last few answers.`
+                : "The student whose ability rises most over recent answers will appear here."}
               button="Send Congratulations"
               onClick={handleCongratulate}
-              disabled={!students.length}
+              disabled={!topImprover}
             />
             <div className="card" style={{ background: "var(--surface-mid)" }}>
-              <h3 style={{ color: "var(--muted)", fontSize: "var(--text-xs)", fontWeight: "var(--font-black)", textTransform: "uppercase", margin: "0 0 var(--space-4)" }}>Active Class Session</h3>
+              <h3 style={{ color: "var(--muted)", fontSize: "var(--text-xs)", fontWeight: "var(--font-black)", textTransform: "uppercase", margin: "0 0 var(--space-4)" }}>Recent Activity</h3>
               <div style={{ display: "flex", alignItems: "start", gap: "var(--space-3)", marginBottom: "var(--space-4)" }}>
-                <span style={{ width: "var(--space-2)", height: "var(--space-2)", borderRadius: "var(--radius-full)", background: "var(--success)", marginTop: "var(--space-2)" }} />
+                <span style={{ width: "var(--space-2)", height: "var(--space-2)", borderRadius: "var(--radius-full)", background: insights.active_last_24h ? "var(--success)" : "var(--muted)", marginTop: "var(--space-2)" }} />
                 <div>
-                  <strong>8 students currently active</strong>
-                  <p style={{ color: "var(--muted)", margin: "var(--space-1) 0 0" }}>Focus: {selectedTopic}</p>
+                  <strong>{insights.active_last_24h || 0} student{insights.active_last_24h === 1 ? "" : "s"} active in the last 24 hours</strong>
+                  <p style={{ color: "var(--muted)", margin: "var(--space-1) 0 0" }}>Focus: {topicLabel}</p>
                 </div>
               </div>
+              <div style={{ display: "flex", justifyContent: "space-between", background: "var(--surface)", borderRadius: "var(--radius-lg)", padding: "var(--space-3)", marginBottom: "var(--space-2)" }}>
+                <span>Answers in the last 7 days</span>
+                <strong style={{ color: "var(--primary)" }}>{insights.attempts_last_7d || 0}</strong>
+              </div>
               <div style={{ display: "flex", justifyContent: "space-between", background: "var(--surface)", borderRadius: "var(--radius-lg)", padding: "var(--space-3)" }}>
-                <span>Avg. Engagement Rate</span>
-                <strong style={{ color: "var(--primary)" }}>94%</strong>
+                <span>Accuracy in the last 7 days</span>
+                <strong style={{ color: "var(--primary)" }}>{insights.accuracy_last_7d === null || insights.accuracy_last_7d === undefined ? "—" : `${insights.accuracy_last_7d}%`}</strong>
               </div>
             </div>
           </aside>
