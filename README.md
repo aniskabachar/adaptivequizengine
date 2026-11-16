@@ -64,9 +64,8 @@ backend/ (FastAPI)      → API endpoints + business logic
   └── misconceptions/   → Error pattern analysis
 ```
 
-## Contributors
+## Author
 
 - **Aniska Bachar** - [@aniskabachar](https://github.com/aniskabachar)
-- **Altamash Shaikh** - [@shaikhaltamash69](https://github.com/shaikhaltamash69)
 
 Built with FastAPI, Next.js, Groq, NetworkX, and SQLAlchemy.
